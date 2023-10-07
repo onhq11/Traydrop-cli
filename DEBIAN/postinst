@@ -1,0 +1,22 @@
+#!/bin/bash
+
+# Load credentials
+echo -e "\e[32m::\e[0m Log in to Traydrop and go to https://traydrop.pl/credentials"
+echo -e "\e[32m::\e[0m vv Copy credentials and paste it here vv"
+echo -n -e "\e[32m::\e[35m >> "
+read -r credentials
+
+# Creating environment file
+echo -e "\e[32m::\e[0m Creating environment folder (/usr/share/traydrop)"
+
+mkdir /usr/share/traydrop
+
+echo -e "\e[32m::\e[0m Generating credentials file"
+echo "$credentials" > /usr/share/traydrop/credentials
+
+chown root:root /usr/share/traydrop/credentials
+chmod 777 /usr/share/traydrop/credentials
+
+# Installation completed
+echo -e "\e[32m::\e[0m "
+echo -e "\e[32m:: Traydrop script installed successfully :)"

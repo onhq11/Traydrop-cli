@@ -1,0 +1,4 @@
+#!/bin/bash
+
+# Remove environment files and folders
+rm -f -r /usr/share/traydrop > /dev/null
