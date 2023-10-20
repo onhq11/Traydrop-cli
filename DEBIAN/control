@@ -1,5 +1,5 @@
 Package: traydrop
 Version: 1.0
-Maintainer: onhq11 & Szurag
+Maintainer: onhq11
 Architecture: all
-Description: Traydrop command line sending file script
+Description: Traydrop command line tool

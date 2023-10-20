@@ -1,34 +1,390 @@
 #!/bin/bash
 
 file="/usr/share/traydrop/credentials"
-credentials=""
+hostname="https://traydrop.pl"
 
-if [ -e "$file" ]; then
-    credentials=$(<"$file")
+base64Encode() {
+    local plainText="$1"
+    local encodedText=$(echo -n "$plainText" | base64)
+    echo "$encodedText"
+}
+
+cipher() {
+    local ch="$1"
+    local key="$2"
+
+    if [[ ! "$ch" =~ [a-zA-Z] ]]; then
+        echo "$ch"
+        return
+    fi
+
+    local offset
+    if [[ "$ch" == [A-Z] ]]; then
+        offset="A"
+    else
+        offset="a"
+    fi
+
+    local charCode=$(( ( ( ( $(printf "%d" "'$ch") - $(printf "%d" "'$offset") + key + 26 ) % 26 ) + $(printf "%d" "'$offset") )))
+    printf "\\$(printf %o "$charCode")"
+}
+
+encipher() {
+    local input="$1"
+    local key="$2"
+    local output=""
+
+    for ((i=0; i<${#input}; i++)); do
+        local char="${input:$i:1}"
+        output="${output}$(cipher "$char" "$key")"
+    done
+
+    echo "$output"
+}
+
+hashPassword() {
+    local plainText="$1"
+    local encodedText=$(encipher "$(base64Encode "$(encipher "$plainText" 7)")" 13)
+    local hexString=""
+    
+    for ((i=0; i<${#encodedText}; i++)); do
+        local char="${encodedText:$i:1}"
+        local charCode=$(printf "%d" "'$char")
+        hexString="${hexString}$(printf "%x" "$charCode")"
+    done
+
+    local result=$(encipher "$hexString" 3)
+    echo "$result"
+}
+
+btoa() {
+  local input="$1"
+  echo -n "$input" | base64
+}
+
+atob() {
+  echo -n "$1" | base64 -d
+}
+
+hex2a() {
+  local hex="$1"
+  local str=""
+
+  for ((i = 0; i < ${#hex}; i += 2)); do
+    str+="\x${hex:i:2}"
+  done
+
+  echo -e "$str"
+}
+
+caesarShift() {
+  local str="$1"
+  local amount="$2"
+  local output=""
+
+  if [ "$amount" -lt 0 ]; then
+    amount=$((amount + 26))
+  fi
+
+  for ((i = 0; i < ${#str}; i++)); do
+    local c="${str:i:1}"
+    if [[ "$c" =~ [a-zA-Z] ]]; then
+      local code=$(printf "%d" "'$c")
+      if [ "$code" -ge 65 ] && [ "$code" -le 90 ]; then
+        c=$(printf "\\$(printf '%03o' $(((code - 65 + amount) % 26 + 65)))")
+      elif [ "$code" -ge 97 ] && [ "$code" -le 122 ]; then
+        c=$(printf "\\$(printf '%03o' $(((code - 97 + amount) % 26 + 97)))")
+      fi
+    fi
+    output="${output}${c}"
+  done
+
+  echo "$output"
+}
+
+if [ "$1" == "login" ]; then
+    echo -e "\e[32m::\e[0m \e[31m[Login]\e[0m"
+    echo -e "\e[32m::\e[0m"
+    echo -e -n "\e[32m::\e[33m Email: \e[0m"
+    read email
+    echo -e -n "\e[32m::\e[33m Password: \e[0m"
+    read -s password
+    echo -e "\n\e[32m::\e[0m"
+    echo -e -n "\e[32m::\e[0m Logging in..."
+
+    response=$(curl -s -X POST -H "Accept: application/json" -H "Content-Type: application/json" -d "{\"email\": \"$email\",\"password\": \"$password\"}" "$hostname/api/auth/login")
+
+    echo -ne "\r"
+    echo -e "\e[32m::\e[0m Successfully logged in :)"
+    echo -e "\e[32m::\e[0m"
+
+    TOKEN=$(echo "$response" | grep -o '"token": *"[^"]*"' | awk -F '"' '{print $4}')
+    resPassword=$(hashPassword $password)
+
+    echo "{\"token\":\"$TOKEN\",\"password\":\"$resPassword\"}" > /usr/share/traydrop/credentials
+elif [ "$1" == "logout" ]; then
+    echo "" > $file
+
+    echo
+    echo -e "\e[32m::\e[0m"
+    echo -e "\e[32m::\e[32m Successfully removed user data (Logged out)"
+    echo -e "\e[32m::\e[0m"
+    echo 
+elif [ "$1" == "help" ]; then
+    echo
+    echo -e "\e[32m::\e[0m"
+    echo -e "\e[32m::\e[0m \e[31mAuthorization"
+    echo -e "\e[32m::\e[0m \e[32mtraydrop \e[33mlogin\e[0m - Log in to Traydrop"
+    echo -e "\e[32m::\e[0m \e[32mtraydrop \e[33mlogout\e[0m - Guess what... Log out"
+    echo -e "\e[32m::\e[0m"
+    echo -e "\e[32m::\e[0m \e[36mRequests"
+    echo -e "\e[32m::\e[0m \e[32mtraydrop \e[33mfile <file_path>\e[0m - Send file from path to Traydrop"
+    echo -e "\e[32m::\e[0m \e[32mtraydrop \e[33mclipboard <text>\e[0m - Send text to Traydrop"
+    echo -e "\e[32m::\e[0m"
+    echo -e "\e[32m::\e[0m \e[32mtraydrop \e[33mlist [page]\e[0m - List files"
+    echo -e "\e[32m::\e[0m \e[32mtraydrop \e[33mdownload <file_id>\e[0m - Download file by file ID"
+    echo -e "\e[32m::\e[0m"
+    echo 
+elif [ "$1" == "file" ]; then
+    if [ -e "$file" ]; then
+        credentials=$(<"$file")
+    else
+        echo
+        echo -e "\e[32m::\e[0m"
+        echo -e "\e[32m::\e[0m File not found:"
+        echo -e "\e[32m::\e[33m $file"
+        echo -e "\e[32m::\e[0m"
+        echo
+        exit 1
+    fi
+
+    if ! [[ "$credentials" =~ "\"token\"" ]]; then
+        echo
+        echo -e "\e[32m::\e[0m"
+        echo -e "\e[32m::\e[0m User is not logged in"
+        echo -e "\e[32m::\e[31m traydrop login"
+        echo -e "\e[32m::\e[0m"
+        echo     
+        exit 1
+    fi
+
+    if [ $# -ne 2 ]; then
+        echo
+        echo -e "\e[32m::\e[0m"
+        echo -e "\e[32m::\e[0m Usage:"
+        echo -e "\e[32m::\e[0m \e[32mtraydrop \e[33mfile <file_path>\e[0m - Send file from path to Traydrop"
+        echo -e "\e[32m::\e[0m"
+        echo
+        exit 1
+    fi
+
+    input_file="$2"
+
+    if [ ! -f "$input_file" ]; then
+        echo
+        echo -e "\e[32m::\e[0m"
+        echo -e "\e[32m::\e[0m File doesn't exists:"
+        echo -e "\e[32m::\e[0m \e[33m$input_file"
+        echo -e "\e[32m::\e[0m"
+        echo
+        exit 1
+    fi
+
+    token=$(echo "$credentials" | grep -o '"token":"[^"]*' | cut -d '"' -f 4)
+    encoded_pass=$(btoa $(caesarShift $(atob $(caesarShift $(hex2a $(caesarShift $(echo "$credentials" | grep -o '"password":"[^"]*' | cut -d '"' -f 4) -3) ) -13) ) -7) )
+
+    original_name=$(basename "$input_file")
+    script_dir="$(dirname "$(readlink -f "$original_name")")"
+    output_path="$script_dir/$original_name"
+
+    echo $output_path
+    echo
+    response=$(curl -X POST \
+    -H "Authorization: Bearer $token" \
+    -F "password=$encoded_pass" \
+    -F "file=@$output_path" \
+    $hostname/api/files)
+
+    echo
+    echo -e "\e[32m::\e[0m"
+    echo -e "\e[32m::\e[0m \e[33m$(echo "$response" | grep -o '"message":"[^"]*' | cut -d '"' -f 4)"
+    echo -e "\e[32m::\e[0m File ID: \e[32m$(echo "$response" | grep -o '"id":[0-9]*' | awk -F: '{print $2}' | tr -d ' ')"
+    echo -e "\e[32m::\e[0m"
+    echo
+elif [ "$1" == "clipboard" ]; then
+    if [ -e "$file" ]; then
+        credentials=$(<"$file")
+    else
+        echo
+        echo -e "\e[32m::\e[0m"
+        echo -e "\e[32m::\e[0m File not found:"
+        echo -e "\e[32m::\e[33m $file"
+        echo -e "\e[32m::\e[0m"
+        echo
+        exit 1
+    fi
+
+    if ! [[ "$credentials" =~ "\"token\"" ]]; then
+        echo
+        echo -e "\e[32m::\e[0m"
+        echo -e "\e[32m::\e[0m User is not logged in"
+        echo -e "\e[32m::\e[31m traydrop login"
+        echo -e "\e[32m::\e[0m"
+        echo     
+        exit 1
+    fi
+
+    if [ $# -ne 2 ]; then
+        echo
+        echo -e "\e[32m::\e[0m"
+        echo -e "\e[32m::\e[0m Usage:"
+        echo -e "\e[32m::\e[0m \e[32mtraydrop \e[33mclipboard <text>\e[0m - Send text to Traydrop"
+        echo -e "\e[32m::\e[0m"
+        echo
+        exit 1
+    fi
+
+    text="$2"
+
+    token=$(echo "$credentials" | grep -o '"token":"[^"]*' | cut -d '"' -f 4)
+    encoded_pass=$(btoa $(caesarShift $(atob $(caesarShift $(hex2a $(caesarShift $(echo "$credentials" | grep -o '"password":"[^"]*' | cut -d '"' -f 4) -3) ) -13) ) -7) )
+
+    echo
+    response=$(curl -X POST \
+    -H "Authorization: Bearer $token" \
+    -H "Accept: application/json" \
+    -H "Content-Type: application/json" \
+    -d "{\"content\":\"$text\",\"device_type\":\"web\",\"password\":\"$encoded_pass\"}" \
+    $hostname/api/clipboard)
+
+    echo
+    echo -e "\e[32m::\e[0m"
+    echo -e "\e[32m::\e[0m \e[33m$(echo "$response" | grep -o '"message":"[^"]*' | cut -d '"' -f 4)"
+    echo -e "\e[32m::\e[0m"
+    echo
+elif [ "$1" == "list" ]; then
+    if [ -e "$file" ]; then
+        credentials=$(<"$file")
+    else
+        echo
+        echo -e "\e[32m::\e[0m"
+        echo -e "\e[32m::\e[0m File not found:"
+        echo -e "\e[32m::\e[33m $file"
+        echo -e "\e[32m::\e[0m"
+        echo
+        exit 1
+    fi
+
+    if ! [[ "$credentials" =~ "\"token\"" ]]; then
+        echo
+        echo -e "\e[32m::\e[0m"
+        echo -e "\e[32m::\e[0m User is not logged in"
+        echo -e "\e[32m::\e[31m traydrop login"
+        echo -e "\e[32m::\e[0m"
+        echo     
+        exit 1
+    fi
+
+    token=$(echo "$credentials" | grep -o '"token":"[^"]*' | cut -d '"' -f 4)
+    encoded_pass=$(btoa $(caesarShift $(atob $(caesarShift $(hex2a $(caesarShift $(echo "$credentials" | grep -o '"password":"[^"]*' | cut -d '"' -f 4) -3) ) -13) ) -7) )
+
+    page=$2
+    if [ -z "$2" ]; then
+        page=1
+    fi
+
+    echo
+    response=$(curl -H "Authorization: Bearer $token" \
+    -H "Accept: application/json" \
+    -H "Content-Type: application/json" \
+    "$hostname/api/files?password=$encoded_pass&per_page=25&order_by=desc&page=$page")
+    
+    echo
+    echo -e "\e[32m::\e[0m"
+    echo -e "\e[32m::\e[31m AVAILABLE FILES (Page $page):\e[0m"
+
+    data=$(echo "$response" | grep -o -P '"id":[0-9]*' | awk -F: '{print $2}' | tr '\n' ' ')
+    file_ids=($data)
+
+    data=$(echo "$response" | grep -o -P '"original_name":"\K[^"]+' | tr '\n' ' ')
+    file_names=($data)
+
+    for ((i = 0; i < ${#file_ids[@]}; i++)); do
+        echo -e "\e[32m::\e[33m ${file_ids[i]}\e[0m - ${file_names[i]}"
+    done
+
+    echo -e "\e[32m::\e[0m"
+    echo
+elif [ "$1" == "download" ]; then
+    if [ -e "$file" ]; then
+        credentials=$(<"$file")
+    else
+        echo
+        echo -e "\e[32m::\e[0m"
+        echo -e "\e[32m::\e[0m File not found:"
+        echo -e "\e[32m::\e[33m $file"
+        echo -e "\e[32m::\e[0m"
+        echo
+        exit 1
+    fi
+
+    if ! [[ "$credentials" =~ "\"token\"" ]]; then
+        echo
+        echo -e "\e[32m::\e[0m"
+        echo -e "\e[32m::\e[0m User is not logged in"
+        echo -e "\e[32m::\e[31m traydrop login"
+        echo -e "\e[32m::\e[0m"
+        echo     
+        exit 1
+    fi
+
+    if [ $# -ne 2 ]; then
+        echo
+        echo -e "\e[32m::\e[0m"
+        echo -e "\e[32m::\e[0m Usage:"
+        echo -e "\e[32m::\e[0m \e[32mtraydrop \e[33mdownload <file_id>\e[0m - Download file by file ID"
+        echo -e "\e[32m::\e[0m"
+        echo
+        exit 1
+    fi
+
+    token=$(echo "$credentials" | grep -o '"token":"[^"]*' | cut -d '"' -f 4)
+    encoded_pass=$(btoa $(caesarShift $(atob $(caesarShift $(hex2a $(caesarShift $(echo "$credentials" | grep -o '"password":"[^"]*' | cut -d '"' -f 4) -3) ) -13) ) -7) )
+
+    echo
+    read=$(curl -H "Authorization: Bearer $token" \
+    -H "Accept: application/json" \
+    -H "Content-Type: application/json" \
+    "$hostname/api/files/$2?password=$encoded_pass")
+
+    filename=$(echo "$read" | grep -o '"original_name":"[^"]*' | awk -F ':"' '{print $2}')
+    original_name=$(basename "$filename")
+    script_dir="$(dirname "$(readlink -f "$original_name")")"
+    output_path="$script_dir/$original_name"
+
+    curl -o "$output_path" -H "Authorization: Bearer $token" \
+    -H "Accept: application/json" \
+    -H "Content-Type: application/json" \
+    "$hostname/api/files/$2/download?password=$encoded_pass"
+
+    if [ $? -eq 0 ]; then
+        echo
+        echo -e "\e[32m::\e[0m"
+        echo -e "\e[32m::\e[0m File downloaded and saved to: \e[33m$output_path"
+        echo -e "\e[32m::\e[0m"
+        echo
+    else
+        echo
+        echo -e "\e[32m::\e[0m"
+        echo -e "\e[32m::\e[0m Failed to download"
+        echo -e "\e[32m::\e[0m"
+        echo
+    fi
 else
-    echo "File not found: $file"
+    echo
+    echo -e "\e[32m::\e[0m"
+    echo -e "\e[32m::\e[0m Invalid usage"
+    echo -e "\e[32m::\e[0m Check usage using: \e[32mtraydrop \e[33mhelp\e[0m"
+    echo -e "\e[32m::\e[0m"
+    echo 
 fi
-
-if [ $# -ne 1 ]; then
-  echo "Usage: traydrop <file>"
-  exit 1
-fi
-
-input_file="$1"
-
-if [ ! -f "$input_file" ]; then
-  echo "File $input_file doesn't exists."
-  exit 1
-fi
-
-token=$(echo "$credentials" | grep -o '"token":"[^"]*' | cut -d '"' -f 4)
-password=$(echo "$credentials" | grep -o '"_gqwexvcfq":"[^"]*' | cut -d '"' -f 4)
-
-response=$(curl -X POST \
-  -H "Authorization: Bearer $token" \
-  -F "password=$password" \
-  -F "file=@$input_file" \
-  https://traydrop.pl/api/files)
-
-echo "Server response:"
-echo "$response"
